@@ -18,7 +18,7 @@ PlasmoidItem {
     Plasmoid.status: session.active ? PlasmaCore.Types.ActiveStatus : PlasmaCore.Types.PassiveStatus
     Plasmoid.backgroundHints: PlasmaCore.Types.DefaultBackground
     toolTipMainText: "Owly KDE · AirDrop"
-    toolTipSubText: session.active ? qsTr("Disponible para compartir · %1 min restantes").arg(Math.ceil(session.remaining / 60)) : qsTr("Comparte archivos con dispositivos Apple")
+    toolTipSubText: session.active ? qsTr("Available to share · %1 min remaining").arg(Math.ceil(session.remaining / 60)) : qsTr("Share files with Apple devices")
     switchWidth: Kirigami.Units.gridUnit * 18
     switchHeight: Kirigami.Units.gridUnit * 22
 
