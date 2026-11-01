@@ -32,7 +32,7 @@ PC.Page {
 
     FileDialog {
         id: picker
-        title: qsTr("Seleccionar archivos para enviar")
+        title: qsTr("Select files to send")
         fileMode: FileDialog.OpenFiles
         onAccepted: view.chooseFiles(selectedFiles)
     }
@@ -61,13 +61,13 @@ PC.Page {
                 Kirigami.Heading { text: "Owly KDE"; level: 2 }
                 PE.DescriptiveLabel {
                     Layout.fillWidth: true
-                    text: qsTr("AirDrop, desde tu escritorio")
+                    text: qsTr("AirDrop from your desktop")
                     elide: Text.ElideRight
                 }
             }
             PC.ToolButton {
                 icon.name: "configure"
-                text: qsTr("Configurar Owly")
+                text: qsTr("Configure Owly")
                 display: PC.AbstractButton.IconOnly
                 PC.ToolTip.text: text
                 PC.ToolTip.visible: hovered
@@ -97,16 +97,16 @@ PC.Page {
                             Layout.fillWidth: true
                             font.bold: true
                             wrapMode: Text.Wrap
-                            text: view.session.stopping ? qsTr("Restaurando Wi-Fi…")
-                                : view.session.starting ? qsTr("Activando AirDrop…")
-                                : view.session.active ? qsTr("AirDrop está activo") : qsTr("Listo para compartir")
+                            text: view.session.stopping ? qsTr("Restoring Wi‑Fi…")
+                                : view.session.starting ? qsTr("Activating AirDrop…")
+                                : view.session.active ? qsTr("AirDrop is active") : qsTr("Ready to share")
                         }
                         PE.DescriptiveLabel {
                             Layout.fillWidth: true
                             wrapMode: Text.Wrap
                             text: view.session.active
-                                ? qsTr("La sesión termina en %1:%2").arg(Math.floor(view.session.remaining / 60)).arg(String(view.session.remaining % 60).padStart(2, "0"))
-                                : qsTr("Activa una sesión para enviar y recibir.")
+                                ? qsTr("The session ends in %1:%2").arg(Math.floor(view.session.remaining / 60)).arg(String(view.session.remaining % 60).padStart(2, "0"))
+                                : qsTr("Start a session to send and receive.")
                         }
                     }
                     PC.BusyIndicator {
@@ -116,7 +116,7 @@ PC.Page {
                         running: visible
                     }
                     PC.Button {
-                        text: view.session.active || view.session.starting ? qsTr("Desactivar") : qsTr("Activar")
+                        text: view.session.active || view.session.starting ? qsTr("Deactivate") : qsTr("Activate")
                         icon.name: view.session.active ? "media-playback-stop" : "network-connect"
                         enabled: !view.session.stopping && !view.session.checking && (view.session.available || view.session.active || view.session.starting)
                         onClicked: view.session.active || view.session.starting ? view.backend.stop() : view.backend.start()
@@ -124,7 +124,7 @@ PC.Page {
                 }
                 PC.Switch {
                     Layout.fillWidth: true
-                    text: qsTr("Permitir solicitudes de recepción")
+                    text: qsTr("Allow incoming requests")
                     checked: view.session.receiving
                     enabled: view.session.active && !view.session.stopping
                     onToggled: view.backend.setReceiving(checked)
@@ -137,8 +137,8 @@ PC.Page {
             Layout.fillWidth: true
             currentIndex: view.page
             onCurrentIndexChanged: view.page = currentIndex
-            PC.TabButton { text: qsTr("Enviar"); icon.name: "document-send" }
-            PC.TabButton { text: qsTr("Actividad"); icon.name: "view-history" }
+            PC.TabButton { text: qsTr("Send"); icon.name: "document-send" }
+            PC.TabButton { text: qsTr("Activity"); icon.name: "view-history" }
         }
 
         PC.ScrollView {
@@ -173,7 +173,7 @@ PC.Page {
                             spacing: Kirigami.Units.smallSpacing
                             PC.Label {
                                 Layout.fillWidth: true
-                                text: qsTr("%1 quiere compartir contigo").arg(requestCard.modelData.sender)
+                                text: qsTr("%1 wants to share with you").arg(requestCard.modelData.sender)
                                 textFormat: Text.PlainText
                                 font.bold: true
                                 wrapMode: Text.Wrap
@@ -190,18 +190,18 @@ PC.Page {
                             }
                             PE.DescriptiveLabel {
                                 Layout.fillWidth: true
-                                text: qsTr("Responde antes de 15 segundos.")
+                                text: qsTr("Reply within 15 seconds.")
                                 wrapMode: Text.Wrap
                             }
                             RowLayout {
                                 Layout.alignment: Qt.AlignRight
                                 spacing: Kirigami.Units.smallSpacing
                                 PC.Button {
-                                    text: qsTr("Rechazar")
+                                    text: qsTr("Reject")
                                     onClicked: view.backend.answer(requestCard.modelData.id, false)
                                 }
                                 PC.Button {
-                                    text: qsTr("Aceptar")
+                                    text: qsTr("Accept")
                                     icon.name: "dialog-ok"
                                     onClicked: view.backend.answer(requestCard.modelData.id, true)
                                 }
@@ -213,7 +213,7 @@ PC.Page {
                 Kirigami.InlineMessage {
                     Layout.fillWidth: true
                     visible: !view.session.active && !!view.session.report.mode && view.session.report.mode !== "shared"
-                    text: qsTr("Con esta tarjeta, activar AirDrop desconectará temporalmente el Wi-Fi. Se restaurará al terminar la sesión.")
+                    text: qsTr("With this card, activating AirDrop will temporarily disconnect Wi‑Fi. It will be restored when the session ends.")
                     type: Kirigami.MessageType.Information
                 }
 
@@ -248,20 +248,20 @@ PC.Page {
                                 Layout.fillWidth: true
                                 horizontalAlignment: Text.AlignHCenter
                                 font.bold: true
-                                text: view.selectedFiles.length > 0 ? qsTr("%1 archivos seleccionados").arg(view.selectedFiles.length) : qsTr("Comparte algo")
+                                text: view.selectedFiles.length > 0 ? qsTr("%1 files selected").arg(view.selectedFiles.length) : qsTr("Share something")
                                 wrapMode: Text.Wrap
                             }
                             PE.DescriptiveLabel {
                                 Layout.fillWidth: true
                                 horizontalAlignment: Text.AlignHCenter
-                                text: view.selectedFiles.length > 0 ? view.fileName(view.selectedFiles[0]) : qsTr("Arrastra archivos aquí o selecciónalos.")
+                                text: view.selectedFiles.length > 0 ? view.fileName(view.selectedFiles[0]) : qsTr("Drag files here or select them.")
                                 textFormat: Text.PlainText
                                 elide: Text.ElideMiddle
                             }
                             RowLayout {
                                 Layout.alignment: Qt.AlignHCenter
                                 PC.Button {
-                                    text: view.selectedFiles.length > 0 ? qsTr("Cambiar archivos…") : qsTr("Seleccionar archivos…")
+                                    text: view.selectedFiles.length > 0 ? qsTr("Change files…") : qsTr("Select files…")
                                     icon.name: "list-add"
                                     enabled: !view.session.sending
                                     onClicked: picker.open()
@@ -269,7 +269,7 @@ PC.Page {
                                 PC.ToolButton {
                                     visible: view.selectedFiles.length > 0
                                     icon.name: "edit-clear"
-                                    text: qsTr("Quitar selección")
+                                    text: qsTr("Remove selection")
                                     display: PC.AbstractButton.IconOnly
                                     enabled: !view.session.sending
                                     PC.ToolTip.text: text
@@ -284,7 +284,7 @@ PC.Page {
                         Layout.fillWidth: true
                         Kirigami.Heading {
                             Layout.fillWidth: true
-                            text: qsTr("Dispositivos cercanos")
+                            text: qsTr("Nearby devices")
                             level: 3
                             elide: Text.ElideRight
                         }
@@ -296,7 +296,7 @@ PC.Page {
                         }
                         PC.ToolButton {
                             icon.name: "view-refresh"
-                            text: qsTr("Buscar dispositivos")
+                            text: qsTr("Search for devices")
                             display: PC.AbstractButton.IconOnly
                             enabled: view.session.active && !view.session.scanning && !view.session.stopping
                             PC.ToolTip.text: text
@@ -315,7 +315,7 @@ PC.Page {
                             icon.name: "smartphone"
                             highlighted: view.selectedTarget === modelData.id
                             enabled: !view.session.sending && !view.session.stopping
-                            Accessible.name: qsTr("Enviar a %1").arg(modelData.name)
+                            Accessible.name: qsTr("Send to %1").arg(modelData.name)
                             onClicked: view.selectedTarget = modelData.id
                             contentItem: RowLayout {
                                 spacing: Kirigami.Units.largeSpacing
@@ -333,7 +333,7 @@ PC.Page {
                                         textFormat: Text.PlainText
                                         elide: Text.ElideRight
                                     }
-                                    PE.DescriptiveLabel { text: qsTr("Disponible para AirDrop") }
+                                    PE.DescriptiveLabel { text: qsTr("Available for AirDrop") }
                                 }
                                 Kirigami.Icon {
                                     source: "dialog-ok"
@@ -350,8 +350,8 @@ PC.Page {
                         Layout.topMargin: Kirigami.Units.smallSpacing
                         visible: view.session.devices.length === 0
                         iconName: view.session.active ? "network-wireless" : "network-disconnect"
-                        text: view.session.scanning ? qsTr("Buscando dispositivos…") : view.session.active ? qsTr("Aún no hay dispositivos") : qsTr("Activa AirDrop para empezar")
-                        explanation: view.session.active ? qsTr("Desbloquea el dispositivo Apple y elige «Todos durante 10 minutos» en AirDrop.") : qsTr("Tus dispositivos cercanos aparecerán aquí.")
+                        text: view.session.scanning ? qsTr("Searching for devices…") : view.session.active ? qsTr("No devices yet") : qsTr("Turn on AirDrop to get started")
+                        explanation: view.session.active ? qsTr("Unlock your Apple device and choose “Everyone for 10 minutes” in AirDrop.") : qsTr("Your nearby devices will appear here once AirDrop is on.")
                     }
                 }
 
@@ -363,8 +363,8 @@ PC.Page {
                         Layout.fillWidth: true
                         visible: view.session.history.length === 0
                         iconName: "view-history"
-                        text: qsTr("Todo empieza con un archivo")
-                        explanation: qsTr("Las transferencias y los errores aparecerán aquí durante esta sesión del widget.")
+                        text: qsTr("Everything starts with a file")
+                        explanation: qsTr("Transfers and errors will appear here during this widget session.")
                     }
                     Repeater {
                         model: view.session.history
@@ -421,7 +421,7 @@ PC.Page {
                 PC.Button {
                     Layout.alignment: Qt.AlignHCenter
                     visible: !view.session.active && !view.session.starting
-                    text: qsTr("Comprobar de nuevo")
+                    text: qsTr("Check again")
                     icon.name: "view-refresh"
                     enabled: !view.session.checking
                     onClicked: view.backend.diagnose()
@@ -445,13 +445,13 @@ PC.Page {
                 visible: view.session.sending
                 indeterminate: view.session.progress < 0
                 value: Math.max(0, view.session.progress)
-                Accessible.name: qsTr("Progreso del envío")
+                Accessible.name: qsTr("Send progress")
             }
             RowLayout {
                 Layout.fillWidth: true
                 spacing: Kirigami.Units.smallSpacing
                 PC.ToolButton {
-                    text: qsTr("Descargas")
+                    text: qsTr("Downloads")
                     icon.name: "folder-downloads"
                     onClicked: view.backend.openDownloads()
                     PC.ToolTip.text: view.session.destination
@@ -459,7 +459,7 @@ PC.Page {
                 }
                 Item { Layout.fillWidth: true }
                 PC.Button {
-                    text: view.session.sending ? qsTr("Cancelar") : qsTr("Enviar")
+                    text: view.session.sending ? qsTr("Cancel") : qsTr("Send")
                     icon.name: view.session.sending ? "dialog-cancel" : "document-send"
                     enabled: view.session.sending || (view.session.active && !view.session.stopping && view.selectedFiles.length > 0 && view.session.devices.some(device => device.id === view.selectedTarget))
                     onClicked: view.session.sending ? view.backend.cancelSend() : view.backend.sendFiles(view.selectedTarget, view.selectedFiles)
