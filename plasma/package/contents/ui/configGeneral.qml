@@ -14,44 +14,44 @@ Kirigami.FormLayout {
 
     QQC2.TextField {
         id: displayName
-        Kirigami.FormData.label: qsTr("Nombre visible:")
-        placeholderText: qsTr("Nombre del equipo")
+        Kirigami.FormData.label: qsTr("Visible name:")
+        placeholderText: qsTr("Computer name")
         Layout.fillWidth: true
     }
     RowLayout {
-        Kirigami.FormData.label: qsTr("Guardar archivos en:")
+        Kirigami.FormData.label: qsTr("Save files to:")
         Layout.fillWidth: true
         QQC2.TextField {
             id: folder
             Layout.fillWidth: true
-            placeholderText: qsTr("Carpeta de descargas del sistema")
+            placeholderText: qsTr("System downloads folder")
         }
         QQC2.Button {
-            text: qsTr("Elegir…")
+            text: qsTr("Choose…")
             icon.name: "folder-open"
             onClicked: folderPicker.open()
         }
     }
     QQC2.SpinBox {
         id: minutes
-        Kirigami.FormData.label: qsTr("Duración de la sesión (min):")
+        Kirigami.FormData.label: qsTr("Session duration (min):")
         from: 1
         to: 60
     }
     QQC2.TextField {
         id: executable
-        Kirigami.FormData.label: qsTr("Ejecutable de Owly:")
-        placeholderText: qsTr("Detección automática")
+        Kirigami.FormData.label: qsTr("Owly executable:")
+        placeholderText: qsTr("Automatic detection")
         Layout.fillWidth: true
     }
     QQC2.Label {
         Layout.fillWidth: true
-        text: qsTr("Los cambios se aplican a la siguiente sesión. Cada transferencia entrante requiere tu aceptación.")
+        text: qsTr("Changes apply to the next session. Each incoming transfer requires your acceptance.")
         wrapMode: Text.Wrap
     }
     FolderDialog {
         id: folderPicker
-        title: qsTr("Carpeta para los archivos recibidos")
+        title: qsTr("Folder for received files")
         onAccepted: folder.text = decodeURIComponent(String(selectedFolder).replace(/^file:\/\//, ""))
     }
 }
