@@ -2,66 +2,469 @@
 pragma ComponentBehavior: Bound
 import QtQuick
 import QtQuick.Layouts
+import QtQuick.Dialogs
 import org.kde.kirigami as Kirigami
 import org.kde.plasma.components as PC
 import org.kde.plasma.extras as PE
-import "backend" as Owly
 
-PC.ItemDelegate {
-    id: fileRow
-    required property var file
+PC.Page {
+    id: view
     required property var backend
-    objectName: "historyFile"
-    text: file.name
-    padding: Kirigami.Units.smallSpacing
-    Accessible.name: qsTr("Open %1").arg(file.name)
-    PC.ToolTip.text: file.path
-    PC.ToolTip.visible: hovered
-    PC.ToolTip.delay: Kirigami.Units.toolTipDelay
-    onClicked: backend.openHistoryFile(file.url)
+    readonly property var session: backend.state
+    property var selectedFiles: []
+    property string selectedTarget: ""
+    property int page: 0
+    signal configureRequested()
+    padding: 0
 
-    contentItem: RowLayout {
-        spacing: Kirigami.Units.largeSpacing
-        Item {
-            Layout.preferredWidth: Kirigami.Units.iconSizes.large
-            Layout.preferredHeight: Layout.preferredWidth
-            Owly.FileThumbnail {
-                id: thumbnail
-                objectName: "historyThumbnail"
-                anchors.fill: parent
-                source: fileRow.file.url
-            }
-            Kirigami.Icon {
-                anchors.centerIn: parent
-                width: Kirigami.Units.iconSizes.medium
-                height: width
-                source: fileRow.file.icon || "unknown"
-                visible: !thumbnail.ready
+    function chooseFiles(urls) {
+        if (urls.length > 0) {
+            selectedFiles = Array.from(urls)
+            page = 0
+        }
+    }
+
+    function fileName(url) {
+        const text = String(url)
+        try { return decodeURIComponent(text.substring(text.lastIndexOf("/") + 1)) }
+        catch (error) { return text.substring(text.lastIndexOf("/") + 1) }
+    }
+
+    FileDialog {
+        id: picker
+        title: qsTr("Select files to send")
+        fileMode: FileDialog.OpenFiles
+        onAccepted: view.chooseFiles(selectedFiles)
+    }
+
+    DropArea {
+        anchors.fill: parent
+        onEntered: drag => { drag.accepted = drag.hasUrls }
+        onDropped: drop => {
+            if (drop.hasUrls) {
+                view.chooseFiles(drop.urls)
+                drop.acceptProposedAction()
             }
         }
+    }
+
+    header: PE.PlasmoidHeading {
+        contentItem: RowLayout {
+            spacing: Kirigami.Units.largeSpacing
+            AirDropIcon {
+                implicitWidth: Kirigami.Units.iconSizes.medium
+                implicitHeight: implicitWidth
+            }
+            ColumnLayout {
+                Layout.fillWidth: true
+                spacing: 0
+                Kirigami.Heading { text: "Owly KDE"; level: 2 }
+                PE.DescriptiveLabel {
+                    Layout.fillWidth: true
+                    text: qsTr("AirDrop from your desktop")
+                    elide: Text.ElideRight
+                }
+            }
+            PC.ToolButton {
+                icon.name: "configure"
+                text: qsTr("Configure Owly")
+                display: PC.AbstractButton.IconOnly
+                PC.ToolTip.text: text
+                PC.ToolTip.visible: hovered
+                onClicked: view.configureRequested()
+            }
+        }
+    }
+
+    ColumnLayout {
+        anchors.fill: parent
+        anchors.margins: Kirigami.Units.largeSpacing
+        spacing: Kirigami.Units.largeSpacing
+
+        PC.Frame {
+            Layout.fillWidth: true
+            padding: Kirigami.Units.largeSpacing
+            ColumnLayout {
+                width: parent.width
+                spacing: Kirigami.Units.smallSpacing
+                RowLayout {
+                    Layout.fillWidth: true
+                    spacing: Kirigami.Units.largeSpacing
+                    ColumnLayout {
+                        Layout.fillWidth: true
+                        spacing: Kirigami.Units.smallSpacing
+                        PC.Label {
+                            Layout.fillWidth: true
+                            font.bold: true
+                            wrapMode: Text.Wrap
+                            text: view.session.stopping ? qsTr("Restoring Wi‑Fi…")
+                                : view.session.starting ? qsTr("Activating AirDrop…")
+                                : view.session.active ? qsTr("AirDrop is active") : qsTr("Ready to share")
+                        }
+                        PE.DescriptiveLabel {
+                            Layout.fillWidth: true
+                            wrapMode: Text.Wrap
+                            text: view.session.active
+                                ? qsTr("Session ends in %1:%2").arg(Math.floor(view.session.remaining / 60)).arg(String(view.session.remaining % 60).padStart(2, "0"))
+                                : qsTr("Activate a session to send and receive.")
+                        }
+                    }
+                    PC.BusyIndicator {
+                        Layout.preferredWidth: Kirigami.Units.iconSizes.medium
+                        Layout.preferredHeight: Layout.preferredWidth
+                        visible: view.session.starting || view.session.stopping || view.session.checking
+                        running: visible
+                    }
+                    PC.Button {
+                        text: view.session.active || view.session.starting ? qsTr("Disable") : qsTr("Enable")
+                        icon.name: view.session.active ? "media-playback-stop" : "network-connect"
+                        enabled: !view.session.stopping && !view.session.checking && (view.session.available || view.session.active || view.session.starting)
+                        onClicked: view.session.active || view.session.starting ? view.backend.stop() : view.backend.start()
+                    }
+                }
+                PC.Switch {
+                    Layout.fillWidth: true
+                    text: qsTr("Allow receive requests")
+                    checked: view.session.receiving
+                    enabled: view.session.active && !view.session.stopping
+                    onToggled: view.backend.setReceiving(checked)
+                }
+            }
+        }
+
+        PC.TabBar {
+            id: tabs
+            Layout.fillWidth: true
+            currentIndex: view.page
+            onCurrentIndexChanged: view.page = currentIndex
+            PC.TabButton { text: qsTr("Send"); icon.name: "document-send" }
+            PC.TabButton { text: qsTr("Activity"); icon.name: "view-history" }
+        }
+
+        PC.ScrollView {
+            id: scroller
+            Layout.fillWidth: true
+            Layout.fillHeight: true
+            contentWidth: availableWidth
+            PC.ScrollBar.horizontal.policy: PC.ScrollBar.AlwaysOff
+
+            ColumnLayout {
+                width: scroller.availableWidth
+                spacing: Kirigami.Units.largeSpacing
+
+                Kirigami.InlineMessage {
+                    Layout.fillWidth: true
+                    visible: view.session.error.length > 0
+                    text: view.session.error
+                    type: Kirigami.MessageType.Error
+                    showCloseButton: true
+                    onVisibleChanged: if (!visible && view.session.error.length > 0) view.backend.dismissError()
+                }
+
+                Repeater {
+                    model: view.session.requests
+                    delegate: PC.Frame {
+                        id: requestCard
+                        required property var modelData
+                        Layout.fillWidth: true
+                        padding: Kirigami.Units.largeSpacing
+                        ColumnLayout {
+                            width: parent.width
+                            spacing: Kirigami.Units.smallSpacing
+                            PC.Label {
+                                Layout.fillWidth: true
+                                text: qsTr("%1 wants to share with you").arg(requestCard.modelData.sender)
+                                textFormat: Text.PlainText
+                                font.bold: true
+                                wrapMode: Text.Wrap
+                            }
+                            Repeater {
+                                model: requestCard.modelData.items
+                                delegate: PC.Label {
+                                    required property var modelData
+                                    Layout.fillWidth: true
+                                    text: modelData.name
+                                    textFormat: Text.PlainText
+                                    elide: Text.ElideMiddle
+                                }
+                            }
+                            PE.DescriptiveLabel {
+                                Layout.fillWidth: true
+                                text: qsTr("Respond within 15 seconds.")
+                                wrapMode: Text.Wrap
+                            }
+                            RowLayout {
+                                Layout.alignment: Qt.AlignRight
+                                spacing: Kirigami.Units.smallSpacing
+                                PC.Button {
+                                    text: qsTr("Reject")
+                                    onClicked: view.backend.answer(requestCard.modelData.id, false)
+                                }
+                                PC.Button {
+                                    text: qsTr("Accept")
+                                    icon.name: "dialog-ok"
+                                    onClicked: view.backend.answer(requestCard.modelData.id, true)
+                                }
+                            }
+                        }
+                    }
+                }
+
+                Kirigami.InlineMessage {
+                    Layout.fillWidth: true
+                    visible: !view.session.active && !!view.session.report.mode && view.session.report.mode !== "shared"
+                    text: qsTr("With this card, turning on AirDrop will temporarily disconnect Wi‑Fi. It will be restored when the session ends.")
+                    type: Kirigami.MessageType.Information
+                }
+
+                Repeater {
+                    model: !view.session.active ? (view.session.report.missing || []) : []
+                    delegate: Kirigami.InlineMessage {
+                        required property var modelData
+                        Layout.fillWidth: true
+                        text: modelData.say
+                        type: Kirigami.MessageType.Warning
+                    }
+                }
+
+                ColumnLayout {
+                    Layout.fillWidth: true
+                    visible: view.page === 0
+                    spacing: Kirigami.Units.largeSpacing
+
+                    PC.Frame {
+                        Layout.fillWidth: true
+                        padding: Kirigami.Units.largeSpacing
+                        ColumnLayout {
+                            width: parent.width
+                            spacing: Kirigami.Units.smallSpacing
+                            Kirigami.Icon {
+                                Layout.alignment: Qt.AlignHCenter
+                                source: view.selectedFiles.length > 0 ? "document-multiple" : "document-send"
+                                implicitWidth: Kirigami.Units.iconSizes.large
+                                implicitHeight: implicitWidth
+                            }
+                            PC.Label {
+                                Layout.fillWidth: true
+                                horizontalAlignment: Text.AlignHCenter
+                                font.bold: true
+                                text: view.selectedFiles.length > 0 ? qsTr("%1 files selected").arg(view.selectedFiles.length) : qsTr("Share something")
+                                wrapMode: Text.Wrap
+                            }
+                            PE.DescriptiveLabel {
+                                Layout.fillWidth: true
+                                horizontalAlignment: Text.AlignHCenter
+                                text: view.selectedFiles.length > 0 ? view.fileName(view.selectedFiles[0]) : qsTr("Drag files here or select them.")
+                                textFormat: Text.PlainText
+                                elide: Text.ElideMiddle
+                            }
+                            RowLayout {
+                                Layout.alignment: Qt.AlignHCenter
+                                PC.Button {
+                                    text: view.selectedFiles.length > 0 ? qsTr("Change files…") : qsTr("Select files…")
+                                    icon.name: "list-add"
+                                    enabled: !view.session.sending
+                                    onClicked: picker.open()
+                                }
+                                PC.ToolButton {
+                                    visible: view.selectedFiles.length > 0
+                                    icon.name: "edit-clear"
+                                    text: qsTr("Clear selection")
+                                    display: PC.AbstractButton.IconOnly
+                                    enabled: !view.session.sending
+                                    PC.ToolTip.text: text
+                                    PC.ToolTip.visible: hovered
+                                    onClicked: view.selectedFiles = []
+                                }
+                            }
+                        }
+                    }
+
+                    RowLayout {
+                        Layout.fillWidth: true
+                        Kirigami.Heading {
+                            Layout.fillWidth: true
+                            text: qsTr("Nearby devices")
+                            level: 3
+                            elide: Text.ElideRight
+                        }
+                        PC.BusyIndicator {
+                            Layout.preferredWidth: Kirigami.Units.iconSizes.smallMedium
+                            Layout.preferredHeight: Layout.preferredWidth
+                            running: view.session.scanning
+                            visible: running
+                        }
+                        PC.ToolButton {
+                            icon.name: "view-refresh"
+                            text: qsTr("Find devices")
+                            display: PC.AbstractButton.IconOnly
+                            enabled: view.session.active && !view.session.scanning && !view.session.stopping
+                            PC.ToolTip.text: text
+                            PC.ToolTip.visible: hovered
+                            onClicked: { view.selectedTarget = ""; view.backend.scan() }
+                        }
+                    }
+
+                    Repeater {
+                        model: view.session.devices
+                        delegate: PC.ItemDelegate {
+                            id: deviceRow
+                            required property var modelData
+                            Layout.fillWidth: true
+                            text: modelData.name
+                            icon.name: "smartphone"
+                            highlighted: view.selectedTarget === modelData.id
+                            enabled: !view.session.sending && !view.session.stopping
+                            Accessible.name: qsTr("Send to %1").arg(modelData.name)
+                            onClicked: view.selectedTarget = modelData.id
+                            contentItem: RowLayout {
+                                spacing: Kirigami.Units.largeSpacing
+                                Kirigami.Icon {
+                                    source: "smartphone"
+                                    implicitWidth: Kirigami.Units.iconSizes.medium
+                                    implicitHeight: implicitWidth
+                                }
+                                ColumnLayout {
+                                    Layout.fillWidth: true
+                                    spacing: 0
+                                    PC.Label {
+                                        Layout.fillWidth: true
+                                        text: deviceRow.modelData.name
+                                        textFormat: Text.PlainText
+                                        elide: Text.ElideRight
+                                    }
+                                    PE.DescriptiveLabel { text: qsTr("Available for AirDrop") }
+                                }
+                                Kirigami.Icon {
+                                    source: "dialog-ok"
+                                    visible: view.selectedTarget === deviceRow.modelData.id
+                                    implicitWidth: Kirigami.Units.iconSizes.smallMedium
+                                    implicitHeight: implicitWidth
+                                }
+                            }
+                        }
+                    }
+
+                    PE.PlaceholderMessage {
+                        Layout.fillWidth: true
+                        Layout.topMargin: Kirigami.Units.smallSpacing
+                        visible: view.session.devices.length === 0
+                        iconName: view.session.active ? "network-wireless" : "network-disconnect"
+                        text: view.session.scanning ? qsTr("Searching for devices…") : view.session.active ? qsTr("No devices yet") : qsTr("Activate AirDrop to get started")
+                        explanation: view.session.active ? qsTr("Unlock the Apple device and choose «Everyone for 10 minutes» in AirDrop.") : qsTr("Your nearby devices will appear here once AirDrop is activated.")
+                    }
+                }
+
+                ColumnLayout {
+                    Layout.fillWidth: true
+                    visible: view.page === 1
+                    spacing: Kirigami.Units.largeSpacing
+                    PE.PlaceholderMessage {
+                        Layout.fillWidth: true
+                        visible: view.session.history.length === 0
+                        iconName: "view-history"
+                        text: qsTr("It all starts with a file")
+                        explanation: qsTr("Transfers and errors will appear here during this widget session.")
+                    }
+                    Repeater {
+                        model: view.session.history
+                        delegate: PC.Frame {
+                            id: historyRow
+                            required property var modelData
+                            Layout.fillWidth: true
+                            padding: Kirigami.Units.largeSpacing
+                            ColumnLayout {
+                                width: parent.width
+                                spacing: Kirigami.Units.smallSpacing
+                                RowLayout {
+                                    Layout.fillWidth: true
+                                    spacing: Kirigami.Units.largeSpacing
+                                    Kirigami.Icon {
+                                        source: historyRow.modelData.icon
+                                        implicitWidth: Kirigami.Units.iconSizes.small
+                                        implicitHeight: implicitWidth
+                                    }
+                                    PC.Label {
+                                        Layout.fillWidth: true
+                                        text: historyRow.modelData.title
+                                        textFormat: Text.PlainText
+                                        font.bold: true
+                                        wrapMode: Text.Wrap
+                                    }
+                                    PE.DescriptiveLabel { text: historyRow.modelData.time }
+                                }
+                                Repeater {
+                                    model: historyRow.modelData.files || []
+                                    delegate: HistoryFile {
+                                        required property var modelData
+                                        Layout.fillWidth: true
+                                        file: modelData
+                                        backend: view.backend
+                                    }
+                                }
+                                PC.TextArea {
+                                    Layout.fillWidth: true
+                                    visible: (historyRow.modelData.files || []).length === 0
+                                    text: historyRow.modelData.detail
+                                    textFormat: TextEdit.PlainText
+                                    wrapMode: TextEdit.WrapAnywhere
+                                    readOnly: true
+                                    selectByMouse: true
+                                    padding: 0
+                                    background: null
+                                }
+                            }
+                        }
+                    }
+                }
+
+                PC.Button {
+                    Layout.alignment: Qt.AlignHCenter
+                    visible: !view.session.active && !view.session.starting
+                    text: qsTr("Check again")
+                    icon.name: "view-refresh"
+                    enabled: !view.session.checking
+                    onClicked: view.backend.diagnose()
+                }
+            }
+        }
+
         ColumnLayout {
             Layout.fillWidth: true
             spacing: Kirigami.Units.smallSpacing
             PC.Label {
                 Layout.fillWidth: true
-                text: fileRow.file.name
+                visible: view.session.notice.length > 0
+                text: view.session.notice
                 textFormat: Text.PlainText
-                elide: Text.ElideMiddle
+                wrapMode: Text.Wrap
+                horizontalAlignment: Text.AlignHCenter
             }
-            PE.DescriptiveLabel {
+            PC.ProgressBar {
                 Layout.fillWidth: true
-                text: fileRow.file.path
-                textFormat: Text.PlainText
-                elide: Text.ElideMiddle
+                visible: view.session.sending
+                indeterminate: view.session.progress < 0
+                value: Math.max(0, view.session.progress)
+                Accessible.name: qsTr("Send progress")
             }
-        }
-        PC.ToolButton {
-            icon.name: "document-open-folder"
-            text: qsTr("Open containing folder")
-            display: PC.AbstractButton.IconOnly
-            PC.ToolTip.text: text
-            PC.ToolTip.visible: hovered
-            onClicked: fileRow.backend.openHistoryFile(fileRow.file.url, true)
+            RowLayout {
+                Layout.fillWidth: true
+                spacing: Kirigami.Units.smallSpacing
+                PC.ToolButton {
+                    text: qsTr("Downloads")
+                    icon.name: "folder-downloads"
+                    onClicked: view.backend.openDownloads()
+                    PC.ToolTip.text: view.session.destination
+                    PC.ToolTip.visible: hovered
+                }
+                Item { Layout.fillWidth: true }
+                PC.Button {
+                    text: view.session.sending ? qsTr("Cancel") : qsTr("Send")
+                    icon.name: view.session.sending ? "dialog-cancel" : "document-send"
+                    enabled: view.session.sending || (view.session.active && !view.session.stopping && view.selectedFiles.length > 0 && view.session.devices.some(device => device.id === view.selectedTarget))
+                    onClicked: view.session.sending ? view.backend.cancelSend() : view.backend.sendFiles(view.selectedTarget, view.selectedFiles)
+                }
+            }
         }
     }
 }
