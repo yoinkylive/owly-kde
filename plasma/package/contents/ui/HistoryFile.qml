@@ -14,7 +14,7 @@ PC.ItemDelegate {
     objectName: "historyFile"
     text: file.name
     padding: Kirigami.Units.smallSpacing
-    Accessible.name: qsTr("Abrir %1").arg(file.name)
+    Accessible.name: qsTr("Open %1").arg(file.name)
     PC.ToolTip.text: file.path
     PC.ToolTip.visible: hovered
     PC.ToolTip.delay: Kirigami.Units.toolTipDelay
@@ -57,7 +57,7 @@ PC.ItemDelegate {
         }
         PC.ToolButton {
             icon.name: "document-open-folder"
-            text: qsTr("Abrir carpeta contenedora")
+            text: qsTr("Open containing folder")
             display: PC.AbstractButton.IconOnly
             PC.ToolTip.text: text
             PC.ToolTip.visible: hovered
