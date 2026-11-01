@@ -1,548 +1,470 @@
 // SPDX-License-Identifier: MIT
-#include "backend.h"
+pragma ComponentBehavior: Bound
+import QtQuick
+import QtQuick.Layouts
+import QtQuick.Dialogs
+import org.kde.kirigami as Kirigami
+import org.kde.plasma.components as PC
+import org.kde.plasma.extras as PE
 
-#include <QDBusConnection>
-#include <QDBusMessage>
-#include <QDBusPendingCall>
-#include <QDateTime>
-#include <QDesktopServices>
-#include <QDir>
-#include <QFileInfo>
-#include <QJsonArray>
-#include <QJsonDocument>
-#include <QMimeDatabase>
-#include <QStandardPaths>
-#include <QTimer>
-#include <QUrl>
+PC.Page {
+    id: view
+    required property var backend
+    readonly property var session: backend.state
+    property var selectedFiles: []
+    property string selectedTarget: ""
+    property int page: 0
+    signal configureRequested()
+    padding: 0
 
-Backend::Backend(QObject *parent) : QObject(parent) {
-  m_state = {{"active", false},
-             {"starting", false},
-             {"stopping", false},
-             {"receiving", false},
-             {"scanning", false},
-             {"sending", false},
-             {"checking", false},
-             {"available", false},
-             {"progress", -1.0},
-             {"devices", QVariantList{}},
-             {"requests", QVariantList{}},
-             {"history", QVariantList{}},
-             {"error", QString{}},
-             {"notice", QString{}},
-             {"report", QVariantMap{}},
-             {"remaining", 0},
-             {"destination", QString{}}};
-  auto *clock = new QTimer(this);
-  clock->setInterval(1000);
-  connect(clock, &QTimer::timeout, this, [this] {
-    if (m_state["active"].toBool()) {
-      set("remaining", qMax(0, m_state["remaining"].toInt() - 1));
-      if (m_state["remaining"].toInt() == 0)
-        stop();
+    function chooseFiles(urls) {
+        if (urls.length > 0) {
+            selectedFiles = Array.from(urls)
+            page = 0
+        }
     }
-  });
-  clock->start();
-}
 
-Backend::~Backend() {
-  m_destroying = true;
-  // The radio's attached D-Bus lease is also released if its process
-  // dies. Never leave a detached lease behind when the widget is removed.
-  for (auto *process : findChildren<QProcess *>()) {
-    process->disconnect(this);
-    if (process->state() != QProcess::NotRunning) {
-      process->terminate();
-      if (!process->waitForFinished(1000)) {
-        process->kill();
-        process->waitForFinished(1000);
-      }
+    function fileName(url) {
+        const text = String(url)
+        try { return decodeURIComponent(text.substring(text.lastIndexOf("/") + 1)) }
+        catch (error) { return text.substring(text.lastIndexOf("/") + 1) }
     }
-  }
-}
 
-void Backend::set(const QString &key, const QVariant &value) {
-  if (m_state.value(key) != value) {
-    m_state[key] = value;
-    emit changed();
-  }
-}
+    FileDialog {
+        id: picker
+        title: qsTr("Select files to send")
+        fileMode: FileDialog.OpenFiles
+        onAccepted: view.chooseFiles(selectedFiles)
+    }
 
-void Backend::configure(const QString &executable, const QString &folder,
-                        const QString &name, int minutes) {
-  // Changing configuration never replaces a process with an active lease.
-  if (m_radio || m_sender || m_receiver || m_browser || m_doctor) {
-    m_pendingConfig = {executable, folder, name, minutes};
-    return;
-  }
-  m_pendingConfig.clear();
-  m_executable = executable.trimmed();
-  if (m_executable.isEmpty()) {
-    const QString local = QDir::homePath() + "/.local/bin/owly";
-    m_executable = QFileInfo(local).isExecutable()
-                       ? local
-                       : QStandardPaths::findExecutable("owly");
-  }
-  m_folder =
-      folder.isEmpty()
-          ? QStandardPaths::writableLocation(QStandardPaths::DownloadLocation)
-          : folder;
-  m_name = name.trimmed();
-  m_minutes = qBound(1, minutes, 60);
-  set("destination", m_folder);
-  diagnose();
-}
-
-void Backend::diagnose() {
-  if (m_doctor || m_state["active"].toBool() || m_radio)
-    return;
-  dismissError();
-  if (m_executable.isEmpty() || !QFileInfo(m_executable).isExecutable()) {
-    set("available", false);
-    fail(tr("Owly executable not found. Install the CLI for this project or set its path in settings."));
-    return;
-  }
-  set("checking", true);
-  m_doctor = launch("doctor", {"doctor", "--json"}, 15000);
-}
-
-QProcess *Backend::launch(const QString &role, const QStringList &args,
-                          int timeout) {
-  auto *process = new QProcess(this);
-  process->setProgram(m_executable);
-  process->setArguments(
-      args); // No shell: file names and peer names are always arguments.
-  process->setProperty("role", role);
-  connect(process, &QProcess::readyReadStandardError, this, [process] {
-    auto bytes = process->property("stderr").toByteArray();
-    bytes += process->readAllStandardError();
-    process->setProperty("stderr", bytes.right(4096));
-  });
-  connect(process, &QProcess::readyReadStandardOutput, this,
-          [this, process, role] {
-            auto bytes = process->property("stdout").toByteArray();
-            bytes += process->readAllStandardOutput();
-            if (role != "doctor") {
-              int newline;
-              while ((newline = bytes.indexOf('\n')) >= 0) {
-                const auto object =
-                    QJsonDocument::fromJson(bytes.left(newline)).object();
-                bytes.remove(0, newline + 1);
-                if (!object.isEmpty())
-                  event(role, object);
-              }
+    DropArea {
+        anchors.fill: parent
+        onEntered: drag => { drag.accepted = drag.hasUrls }
+        onDropped: drop => {
+            if (drop.hasUrls) {
+                view.chooseFiles(drop.urls)
+                drop.acceptProposedAction()
             }
-            // A broken/old CLI must not grow Plasma's memory indefinitely.
-            process->setProperty("stdout", bytes.right(262144));
-          });
-  connect(process, &QProcess::finished, this,
-          [this, process, role](int code, QProcess::ExitStatus status) {
-            finish(process, role, status == QProcess::NormalExit ? code : -1);
-          });
-  connect(process, &QProcess::errorOccurred, this,
-          [this, process, role](QProcess::ProcessError error) {
-            if (error == QProcess::FailedToStart) {
-              process->setProperty("stderr", process->errorString().toUtf8());
-              finish(process, role, -1);
+        }
+    }
+
+    header: PE.PlasmoidHeading {
+        contentItem: RowLayout {
+            spacing: Kirigami.Units.largeSpacing
+            AirDropIcon {
+                implicitWidth: Kirigami.Units.iconSizes.medium
+                implicitHeight: implicitWidth
             }
-          });
-  if (timeout > 0) {
-    QTimer::singleShot(timeout, process, [this, process] {
-      if (process->state() != QProcess::NotRunning) {
-        process->setProperty(
-            "stderr",
-            tr("The operation timed out. Please try again.")
-                .toUtf8());
-        process->kill();
-      }
-    });
-  }
-  // Defer so the caller has assigned its process pointer before signals.
-  QTimer::singleShot(0, process, [process] {
-    if (!process->property("finished").toBool())
-      process->start();
-  });
-  return process;
-}
-
-QStringList Backend::identityArgs() const {
-  QStringList args{"--json", "--iface", m_interface};
-  if (!m_name.isEmpty())
-    args << "--name" << m_name;
-  return args;
-}
-
-void Backend::start() {
-  if (m_radio || !m_state["available"].toBool() || m_state["checking"].toBool())
-    return;
-  dismissError();
-  set("notice", QString{});
-  set("starting", true);
-  m_radio = launch("radio", {"radio", "up", "--json", "--for",
-                             QString::number(m_minutes * 60)});
-  QTimer::singleShot(60000, m_radio, [this] {
-    if (m_state["starting"].toBool()) {
-      fail(tr("Could not activate the radio in time."));
-      stop();
+            ColumnLayout {
+                Layout.fillWidth: true
+                spacing: 0
+                Kirigami.Heading { text: "Owly KDE"; level: 2 }
+                PE.DescriptiveLabel {
+                    Layout.fillWidth: true
+                    text: qsTr("AirDrop from your desktop")
+                    elide: Text.ElideRight
+                }
+            }
+            PC.ToolButton {
+                icon.name: "configure"
+                text: qsTr("Configure Owly")
+                display: PC.AbstractButton.IconOnly
+                PC.ToolTip.text: text
+                PC.ToolTip.visible: hovered
+                onClicked: view.configureRequested()
+            }
+        }
     }
-  });
-}
 
-void Backend::terminate(QProcess *process) {
-  if (!process)
-    return;
-  process->setProperty("cancelled", true);
-  if (process->state() == QProcess::NotRunning) {
-    // launch() may still be queued for this event-loop iteration.
-    finish(process, process->property("role").toString(), 0);
-    return;
-  }
-  process->terminate();
-  QTimer::singleShot(35000, process, [process] {
-    if (process->state() != QProcess::NotRunning)
-      process->kill();
-  });
-}
+    ColumnLayout {
+        anchors.fill: parent
+        anchors.margins: Kirigami.Units.largeSpacing
+        spacing: Kirigami.Units.largeSpacing
 
-void Backend::stop() {
-  if (!m_radio || m_state["stopping"].toBool())
-    return;
-  set("stopping", true);
-  terminate(m_sender);
-  terminate(m_browser);
-  terminate(m_receiver);
-  set("requests", QVariantList{});
-  terminate(m_radio);
-}
+        PC.Frame {
+            Layout.fillWidth: true
+            padding: Kirigami.Units.largeSpacing
+            ColumnLayout {
+                width: parent.width
+                spacing: Kirigami.Units.smallSpacing
+                RowLayout {
+                    Layout.fillWidth: true
+                    spacing: Kirigami.Units.largeSpacing
+                    ColumnLayout {
+                        Layout.fillWidth: true
+                        spacing: Kirigami.Units.smallSpacing
+                        PC.Label {
+                            Layout.fillWidth: true
+                            font.bold: true
+                            wrapMode: Text.Wrap
+                            text: view.session.stopping ? qsTr("Restoring Wi‑Fi…")
+                                : view.session.starting ? qsTr("Activating AirDrop…")
+                                : view.session.active ? qsTr("AirDrop is active") : qsTr("Ready to share")
+                        }
+                        PE.DescriptiveLabel {
+                            Layout.fillWidth: true
+                            wrapMode: Text.Wrap
+                            text: view.session.active
+                                ? qsTr("Session ends in %1:%2").arg(Math.floor(view.session.remaining / 60)).arg(String(view.session.remaining % 60).padStart(2, "0"))
+                                : qsTr("Activate a session to send and receive.")
+                        }
+                    }
+                    PC.BusyIndicator {
+                        Layout.preferredWidth: Kirigami.Units.iconSizes.medium
+                        Layout.preferredHeight: Layout.preferredWidth
+                        visible: view.session.starting || view.session.stopping || view.session.checking
+                        running: visible
+                    }
+                    PC.Button {
+                        text: view.session.active || view.session.starting ? qsTr("Disable") : qsTr("Enable")
+                        icon.name: view.session.active ? "media-playback-stop" : "network-connect"
+                        enabled: !view.session.stopping && !view.session.checking && (view.session.available || view.session.active || view.session.starting)
+                        onClicked: view.session.active || view.session.starting ? view.backend.stop() : view.backend.start()
+                    }
+                }
+                PC.Switch {
+                    Layout.fillWidth: true
+                    text: qsTr("Allow receive requests")
+                    checked: view.session.receiving
+                    enabled: view.session.active && !view.session.stopping
+                    onToggled: view.backend.setReceiving(checked)
+                }
+            }
+        }
 
-void Backend::scan() {
-  if (!m_state["active"].toBool() || m_state["stopping"].toBool() || m_browser)
-    return;
-  set("devices", QVariantList{});
-  set("scanning", true);
-  auto args = QStringList{"browse"} + identityArgs();
-  args << "--seconds" << "12";
-  m_browser = launch("browse", args, 18000);
-}
+        PC.TabBar {
+            id: tabs
+            Layout.fillWidth: true
+            currentIndex: view.page
+            onCurrentIndexChanged: view.page = currentIndex
+            PC.TabButton { text: qsTr("Send"); icon.name: "document-send" }
+            PC.TabButton { text: qsTr("Activity"); icon.name: "view-history" }
+        }
 
-void Backend::setReceiving(bool enabled) {
-  if (!enabled) {
-    terminate(m_receiver);
-    return;
-  }
-  if (!m_state["active"].toBool() || m_state["stopping"].toBool() || m_receiver)
-    return;
-  if (!QDir().mkpath(m_folder)) {
-    fail(tr("Could not create the downloads folder."));
-    return;
-  }
-  auto args = QStringList{"receive"} + identityArgs();
-  args << "--dir" << m_folder;
-  m_receiver = launch("receive", args);
-  QTimer::singleShot(15000, m_receiver, [this] {
-    if (m_receiver && !m_state["receiving"].toBool()) {
-      fail(tr(
-          "The receiver did not respond. Check that the CLI is up to date."));
-      terminate(m_receiver);
+        PC.ScrollView {
+            id: scroller
+            Layout.fillWidth: true
+            Layout.fillHeight: true
+            contentWidth: availableWidth
+            PC.ScrollBar.horizontal.policy: PC.ScrollBar.AlwaysOff
+
+            ColumnLayout {
+                width: scroller.availableWidth
+                spacing: Kirigami.Units.largeSpacing
+
+                Kirigami.InlineMessage {
+                    Layout.fillWidth: true
+                    visible: view.session.error.length > 0
+                    text: view.session.error
+                    type: Kirigami.MessageType.Error
+                    showCloseButton: true
+                    onVisibleChanged: if (!visible && view.session.error.length > 0) view.backend.dismissError()
+                }
+
+                Repeater {
+                    model: view.session.requests
+                    delegate: PC.Frame {
+                        id: requestCard
+                        required property var modelData
+                        Layout.fillWidth: true
+                        padding: Kirigami.Units.largeSpacing
+                        ColumnLayout {
+                            width: parent.width
+                            spacing: Kirigami.Units.smallSpacing
+                            PC.Label {
+                                Layout.fillWidth: true
+                                text: qsTr("%1 wants to share with you").arg(requestCard.modelData.sender)
+                                textFormat: Text.PlainText
+                                font.bold: true
+                                wrapMode: Text.Wrap
+                            }
+                            Repeater {
+                                model: requestCard.modelData.items
+                                delegate: PC.Label {
+                                    required property var modelData
+                                    Layout.fillWidth: true
+                                    text: modelData.name
+                                    textFormat: Text.PlainText
+                                    elide: Text.ElideMiddle
+                                }
+                            }
+                            PE.DescriptiveLabel {
+                                Layout.fillWidth: true
+                                text: qsTr("Respond within 15 seconds.")
+                                wrapMode: Text.Wrap
+                            }
+                            RowLayout {
+                                Layout.alignment: Qt.AlignRight
+                                spacing: Kirigami.Units.smallSpacing
+                                PC.Button {
+                                    text: qsTr("Reject")
+                                    onClicked: view.backend.answer(requestCard.modelData.id, false)
+                                }
+                                PC.Button {
+                                    text: qsTr("Accept")
+                                    icon.name: "dialog-ok"
+                                    onClicked: view.backend.answer(requestCard.modelData.id, true)
+                                }
+                            }
+                        }
+                    }
+                }
+
+                Kirigami.InlineMessage {
+                    Layout.fillWidth: true
+                    visible: !view.session.active && !!view.session.report.mode && view.session.report.mode !== "shared"
+                    text: qsTr("With this card, turning on AirDrop will temporarily disconnect Wi‑Fi. It will be restored when the session ends.")
+                    type: Kirigami.MessageType.Information
+                }
+
+                Repeater {
+                    model: !view.session.active ? (view.session.report.missing || []) : []
+                    delegate: Kirigami.InlineMessage {
+                        required property var modelData
+                        Layout.fillWidth: true
+                        text: modelData.say
+                        type: Kirigami.MessageType.Warning
+                    }
+                }
+
+                ColumnLayout {
+                    Layout.fillWidth: true
+                    visible: view.page === 0
+                    spacing: Kirigami.Units.largeSpacing
+
+                    PC.Frame {
+                        Layout.fillWidth: true
+                        padding: Kirigami.Units.largeSpacing
+                        ColumnLayout {
+                            width: parent.width
+                            spacing: Kirigami.Units.smallSpacing
+                            Kirigami.Icon {
+                                Layout.alignment: Qt.AlignHCenter
+                                source: view.selectedFiles.length > 0 ? "document-multiple" : "document-send"
+                                implicitWidth: Kirigami.Units.iconSizes.large
+                                implicitHeight: implicitWidth
+                            }
+                            PC.Label {
+                                Layout.fillWidth: true
+                                horizontalAlignment: Text.AlignHCenter
+                                font.bold: true
+                                text: view.selectedFiles.length > 0 ? qsTr("%1 files selected").arg(view.selectedFiles.length) : qsTr("Share something")
+                                wrapMode: Text.Wrap
+                            }
+                            PE.DescriptiveLabel {
+                                Layout.fillWidth: true
+                                horizontalAlignment: Text.AlignHCenter
+                                text: view.selectedFiles.length > 0 ? view.fileName(view.selectedFiles[0]) : qsTr("Drag files here or select them.")
+                                textFormat: Text.PlainText
+                                elide: Text.ElideMiddle
+                            }
+                            RowLayout {
+                                Layout.alignment: Qt.AlignHCenter
+                                PC.Button {
+                                    text: view.selectedFiles.length > 0 ? qsTr("Change files…") : qsTr("Select files…")
+                                    icon.name: "list-add"
+                                    enabled: !view.session.sending
+                                    onClicked: picker.open()
+                                }
+                                PC.ToolButton {
+                                    visible: view.selectedFiles.length > 0
+                                    icon.name: "edit-clear"
+                                    text: qsTr("Clear selection")
+                                    display: PC.AbstractButton.IconOnly
+                                    enabled: !view.session.sending
+                                    PC.ToolTip.text: text
+                                    PC.ToolTip.visible: hovered
+                                    onClicked: view.selectedFiles = []
+                                }
+                            }
+                        }
+                    }
+
+                    RowLayout {
+                        Layout.fillWidth: true
+                        Kirigami.Heading {
+                            Layout.fillWidth: true
+                            text: qsTr("Nearby devices")
+                            level: 3
+                            elide: Text.ElideRight
+                        }
+                        PC.BusyIndicator {
+                            Layout.preferredWidth: Kirigami.Units.iconSizes.smallMedium
+                            Layout.preferredHeight: Layout.preferredWidth
+                            running: view.session.scanning
+                            visible: running
+                        }
+                        PC.ToolButton {
+                            icon.name: "view-refresh"
+                            text: qsTr("Find devices")
+                            display: PC.AbstractButton.IconOnly
+                            enabled: view.session.active && !view.session.scanning && !view.session.stopping
+                            PC.ToolTip.text: text
+                            PC.ToolTip.visible: hovered
+                            onClicked: { view.selectedTarget = ""; view.backend.scan() }
+                        }
+                    }
+
+                    Repeater {
+                        model: view.session.devices
+                        delegate: PC.ItemDelegate {
+                            id: deviceRow
+                            required property var modelData
+                            Layout.fillWidth: true
+                            text: modelData.name
+                            icon.name: "smartphone"
+                            highlighted: view.selectedTarget === modelData.id
+                            enabled: !view.session.sending && !view.session.stopping
+                            Accessible.name: qsTr("Send to %1").arg(modelData.name)
+                            onClicked: view.selectedTarget = modelData.id
+                            contentItem: RowLayout {
+                                spacing: Kirigami.Units.largeSpacing
+                                Kirigami.Icon {
+                                    source: "smartphone"
+                                    implicitWidth: Kirigami.Units.iconSizes.medium
+                                    implicitHeight: implicitWidth
+                                }
+                                ColumnLayout {
+                                    Layout.fillWidth: true
+                                    spacing: 0
+                                    PC.Label {
+                                        Layout.fillWidth: true
+                                        text: deviceRow.modelData.name
+                                        textFormat: Text.PlainText
+                                        elide: Text.ElideRight
+                                    }
+                                    PE.DescriptiveLabel { text: qsTr("Available for AirDrop") }
+                                }
+                                Kirigami.Icon {
+                                    source: "dialog-ok"
+                                    visible: view.selectedTarget === deviceRow.modelData.id
+                                    implicitWidth: Kirigami.Units.iconSizes.smallMedium
+                                    implicitHeight: implicitWidth
+                                }
+                            }
+                        }
+                    }
+
+                    PE.PlaceholderMessage {
+                        Layout.fillWidth: true
+                        Layout.topMargin: Kirigami.Units.smallSpacing
+                        visible: view.session.devices.length === 0
+                        iconName: view.session.active ? "network-wireless" : "network-disconnect"
+                        text: view.session.scanning ? qsTr("Searching for devices…") : view.session.active ? qsTr("No devices yet") : qsTr("Activate AirDrop to get started")
+                        explanation: view.session.active ? qsTr("Unlock the Apple device and choose «Everyone for 10 minutes» in AirDrop.") : qsTr("Your nearby devices will appear here once AirDrop is activated.")
+                    }
+                }
+
+                ColumnLayout {
+                    Layout.fillWidth: true
+                    visible: view.page === 1
+                    spacing: Kirigami.Units.largeSpacing
+                    PE.PlaceholderMessage {
+                        Layout.fillWidth: true
+                        visible: view.session.history.length === 0
+                        iconName: "view-history"
+                        text: qsTr("It all starts with a file")
+                        explanation: qsTr("Transfers and errors will appear here during this widget session.")
+                    }
+                    Repeater {
+                        model: view.session.history
+                        delegate: PC.Frame {
+                            id: historyRow
+                            required property var modelData
+                            Layout.fillWidth: true
+                            padding: Kirigami.Units.largeSpacing
+                            ColumnLayout {
+                                width: parent.width
+                                spacing: Kirigami.Units.smallSpacing
+                                RowLayout {
+                                    Layout.fillWidth: true
+                                    spacing: Kirigami.Units.largeSpacing
+                                    Kirigami.Icon {
+                                        source: historyRow.modelData.icon
+                                        implicitWidth: Kirigami.Units.iconSizes.small
+                                        implicitHeight: implicitWidth
+                                    }
+                                    PC.Label {
+                                        Layout.fillWidth: true
+                                        text: historyRow.modelData.title
+                                        textFormat: Text.PlainText
+                                        font.bold: true
+                                        wrapMode: Text.Wrap
+                                    }
+                                    PE.DescriptiveLabel { text: historyRow.modelData.time }
+                                }
+                                Repeater {
+                                    model: historyRow.modelData.files || []
+                                    delegate: HistoryFile {
+                                        required property var modelData
+                                        Layout.fillWidth: true
+                                        file: modelData
+                                        backend: view.backend
+                                    }
+                                }
+                                PC.TextArea {
+                                    Layout.fillWidth: true
+                                    visible: (historyRow.modelData.files || []).length === 0
+                                    text: historyRow.modelData.detail
+                                    textFormat: TextEdit.PlainText
+                                    wrapMode: TextEdit.WrapAnywhere
+                                    readOnly: true
+                                    selectByMouse: true
+                                    padding: 0
+                                    background: null
+                                }
+                            }
+                        }
+                    }
+                }
+
+                PC.Button {
+                    Layout.alignment: Qt.AlignHCenter
+                    visible: !view.session.active && !view.session.starting
+                    text: qsTr("Check again")
+                    icon.name: "view-refresh"
+                    enabled: !view.session.checking
+                    onClicked: view.backend.diagnose()
+                }
+            }
+        }
+
+        ColumnLayout {
+            Layout.fillWidth: true
+            spacing: Kirigami.Units.smallSpacing
+            PC.Label {
+                Layout.fillWidth: true
+                visible: view.session.notice.length > 0
+                text: view.session.notice
+                textFormat: Text.PlainText
+                wrapMode: Text.Wrap
+                horizontalAlignment: Text.AlignHCenter
+            }
+            PC.ProgressBar {
+                Layout.fillWidth: true
+                visible: view.session.sending
+                indeterminate: view.session.progress < 0
+                value: Math.max(0, view.session.progress)
+                Accessible.name: qsTr("Send progress")
+            }
+            RowLayout {
+                Layout.fillWidth: true
+                spacing: Kirigami.Units.smallSpacing
+                PC.ToolButton {
+                    text: qsTr("Downloads")
+                    icon.name: "folder-downloads"
+                    onClicked: view.backend.openDownloads()
+                    PC.ToolTip.text: view.session.destination
+                    PC.ToolTip.visible: hovered
+                }
+                Item { Layout.fillWidth: true }
+                PC.Button {
+                    text: view.session.sending ? qsTr("Cancel") : qsTr("Send")
+                    icon.name: view.session.sending ? "dialog-cancel" : "document-send"
+                    enabled: view.session.sending || (view.session.active && !view.session.stopping && view.selectedFiles.length > 0 && view.session.devices.some(device => device.id === view.selectedTarget))
+                    onClicked: view.session.sending ? view.backend.cancelSend() : view.backend.sendFiles(view.selectedTarget, view.selectedFiles)
+                }
+            }
+        }
     }
-  });
 }
-
-void Backend::sendFiles(const QString &target, const QVariantList &urls) {
-  if (target.isEmpty() || urls.isEmpty() || m_sender ||
-      !m_state["active"].toBool() || m_state["stopping"].toBool())
-    return;
-  QStringList paths;
-  for (const auto &value : urls) {
-    const auto url = value.toUrl();
-    const QFileInfo file(url.toLocalFile());
-    if (!url.isLocalFile() || !file.isFile() || !file.isReadable()) {
-      fail(tr("Select readable local files."));
-      return;
-    }
-    paths << file.absoluteFilePath();
-  }
-  dismissError();
-  QString receiverName;
-  for (const auto &value : m_state["devices"].toList()) {
-    const auto device = value.toMap();
-    if (device["id"].toString() == target) {
-      receiverName = device["name"].toString();
-      break;
-    }
-  }
-  if (receiverName.isEmpty()) {
-    fail(tr("The device is no longer in the list. Search for it again."));
-    return;
-  }
-  set("progress", -1.0);
-  set("sending", true);
-  set("notice", tr("Locating the device again…"));
-  auto args = QStringList{"send"} + identityArgs();
-  // Discovery IDs are snapshots. In particular an iPhone may change its
-  // AWDL address between browsing and sending. Resolve its advertised name
-  // through the CLI's normal mDNS/AWDL lookup instead of pinning the old MAC.
-  args << "--to" << receiverName << "--";
-  args += paths;
-  m_sender = launch("send", args, 300000);
-  m_sender->setProperty("paths", paths);
-}
-
-void Backend::cancelSend() { terminate(m_sender); }
-
-void Backend::answer(const QString &id, bool accept) {
-  if (!m_receiver)
-    return;
-  bool valid = false;
-  const auto number = id.toULongLong(&valid);
-  if (!valid)
-    return;
-  // Only answer prompts still owned by this receiver process.
-  bool pending = false;
-  for (const auto &value : m_state["requests"].toList())
-    pending |= value.toMap()["id"].toString() == id;
-  if (!pending)
-    return;
-  m_receiver->write(
-      QJsonDocument(QJsonObject{{"id", qint64(number)}, {"accept", accept}})
-          .toJson(QJsonDocument::Compact) +
-      '\n');
-  removeRequest(id);
-  set("notice",
-      accept ? tr("Receiving transfer…") : tr("Request rejected"));
-}
-
-void Backend::removeRequest(const QString &id) {
-  auto requests = m_state["requests"].toList();
-  for (qsizetype i = requests.size(); i > 0; --i)
-    if (requests[i - 1].toMap()["id"].toString() == id)
-      requests.removeAt(i - 1);
-  set("requests", requests);
-}
-
-void Backend::event(const QString &role, const QJsonObject &object) {
-  const auto type = object["event"].toString();
-  if (role == "radio" && type == "ready") {
-    m_interface = object["interface"].toString("awdl0");
-    set("starting", false);
-    set("active", true);
-    set("remaining", m_minutes * 60);
-    setReceiving(true);
-    scan();
-  } else if (role == "receive" && type == "ready") {
-    set("receiving", true);
-  } else if (role == "browse" && type == "device") {
-    auto devices = m_state["devices"].toList();
-    const auto id = object["id"].toString();
-    const auto name = object["name"].toString();
-    for (const auto &value : devices) {
-      const auto device = value.toMap();
-      if (device["id"] == id || device["name"] == name)
-        return;
-    }
-    if (devices.size() < 100 && !id.isEmpty()) {
-      devices << QVariantMap{{"id", id}, {"name", name}};
-      set("devices", devices);
-    }
-  } else if (role == "send") {
-    if (type == "stage") {
-      const auto stage = object["stage"].toString();
-      if (stage == "discovering")
-        set("notice", tr("Locating the device again…"));
-      else if (stage == "preparing")
-        set("notice",
-            tr("Preparing files and requesting the transfer…"));
-    } else if (type == "progress") {
-      const double total = object["total"].toDouble();
-      set("progress", total > 0
-                          ? qBound(0.0, object["sent"].toDouble() / total, 1.0)
-                          : -1.0);
-    } else if (type == "accepted") {
-      set("notice", tr("Sending files…"));
-    } else if (type == "delivered") {
-      m_sender->setProperty("delivered", true);
-      set("notice", tr("Files sent"));
-      record(tr("Files sent"), tr("The transfer completed"),
-             "document-send", m_sender->property("paths").toStringList());
-      notify(tr("Files sent"), tr("The transfer completed."));
-    } else if (type == "declined") {
-      m_sender->setProperty("handled", true);
-      set("notice", tr("The device rejected the transfer"));
-    } else if (type == "failed") {
-      m_sender->setProperty("handled", true);
-      fail(object["reason"].toString());
-    }
-  } else if (role == "receive") {
-    const auto id = QString::number(object["id"].toInteger());
-    if (type == "request") {
-      auto request = object.toVariantMap();
-      request["id"] = id;
-      auto requests = m_state["requests"].toList();
-      requests << request;
-      set("requests", requests);
-      notify(tr("AirDrop request"),
-             object["sender"].toString() +
-                 tr(" wants to send you files or links."));
-      emit incoming();
-    } else if (type == "withdrawn") {
-      removeRequest(id);
-    } else if (type == "received" || type == "urls") {
-      removeRequest(id);
-      const auto values =
-          object[type == "received" ? "paths" : "urls"].toArray();
-      QStringList items;
-      for (const auto &value : values)
-        items << value.toString();
-      const auto title = type == "received" ? tr("Files received")
-                                            : tr("Links received");
-      // Links are displayed as plain text, never opened automatically.
-      record(title, items.join('\n'),
-             type == "received" ? "folder-downloads" : "edit-link",
-             type == "received" ? items : QStringList{});
-      set("notice", title);
-      notify(title, type == "received" ? tr("Saved in %1").arg(m_folder)
-                                       : items.join('\n'));
-    } else if (type == "failed") {
-      removeRequest(id);
-      fail(object["reason"].toString());
-    }
-  }
-}
-
-void Backend::finish(QProcess *process, const QString &role, int code) {
-  if (process->property("finished").toBool() || m_destroying)
-    return;
-  process->setProperty("finished", true);
-  const bool cancelled = process->property("cancelled").toBool();
-  const auto detail =
-      QString::fromUtf8(process->property("stderr").toByteArray()).trimmed();
-  if (role == "doctor") {
-    m_doctor = nullptr;
-    set("checking", false);
-    const auto report =
-        QJsonDocument::fromJson(process->property("stdout").toByteArray())
-            .object();
-    set("report", report.toVariantMap());
-    set("available", report["hardware"].toBool() &&
-                         report["missing"].isArray() &&
-                         report["missing"].toArray().isEmpty());
-    if (report.isEmpty())
-      fail(detail.isEmpty() ? tr("Owly did not return a valid diagnosis.")
-                            : detail);
-  } else if (role == "radio") {
-    m_radio = nullptr;
-    terminate(m_receiver);
-    terminate(m_browser);
-    terminate(m_sender);
-    set("active", false);
-    set("starting", false);
-    set("stopping", false);
-    set("remaining", 0);
-    set("requests", QVariantList{});
-    set("devices", QVariantList{});
-    if (!cancelled && code == 0)
-      set("notice", tr("The AirDrop session ended"));
-  } else if (role == "receive") {
-    m_receiver = nullptr;
-    set("receiving", false);
-    set("requests", QVariantList{});
-  } else if (role == "browse") {
-    m_browser = nullptr;
-    set("scanning", false);
-  } else if (role == "send") {
-    m_sender = nullptr;
-    set("sending", false);
-    set("progress", -1.0);
-    if (cancelled)
-      set("notice", tr("Transfer cancelled"));
-    // A CLI without --json must never look like a successful transfer.
-    if (code == 0 && !cancelled && !process->property("delivered").toBool())
-      fail(tr("Owly ended without confirming delivery. Check the CLI version."));
-  }
-  if (code != 0 && !cancelled && role != "doctor" &&
-      !process->property("handled").toBool())
-    fail(detail.isEmpty() ? tr("Owly ended unexpectedly.")
-                          : detail);
-  process->deleteLater();
-  if (!m_pendingConfig.isEmpty() && !m_radio && !m_sender && !m_receiver &&
-      !m_browser && !m_doctor) {
-    const auto config = m_pendingConfig;
-    configure(config[0].toString(), config[1].toString(), config[2].toString(),
-              config[3].toInt());
-  }
-}
-
-void Backend::record(const QString &title, const QString &detail,
-                     const QString &icon, const QStringList &paths) {
-  QVariantList files;
-  const QMimeDatabase mimeDatabase;
-  for (const auto &path : paths) {
-    const QFileInfo file(path);
-    // Transfer events carry filesystem paths, never user-supplied URL schemes.
-    if (!file.isAbsolute())
-      continue;
-    files << QVariantMap{
-        {"url", QUrl::fromLocalFile(file.absoluteFilePath())},
-        {"name", file.fileName()},
-        {"path", file.absoluteFilePath()},
-        {"icon", mimeDatabase.mimeTypeForFile(file).iconName()}};
-  }
-  auto history = m_state["history"].toList();
-  history.prepend(
-      QVariantMap{{"title", title},
-                  {"detail", detail},
-                  {"icon", icon},
-                  {"files", files},
-                  {"time", QDateTime::currentDateTime().toString("HH:mm")}});
-  while (history.size() > 20)
-    history.removeLast();
-  set("history", history);
-}
-
-void Backend::notify(const QString &title, const QString &body) {
-  auto message = QDBusMessage::createMethodCall(
-      "org.freedesktop.Notifications", "/org/freedesktop/Notifications",
-      "org.freedesktop.Notifications", "Notify");
-  message.setArguments({QString("Owly"), uint(0), QString("network-wireless"),
-                        title, body.toHtmlEscaped(), QStringList{},
-                        QVariantMap{}, 8000});
-  QDBusConnection::sessionBus().asyncCall(message);
-}
-
-void Backend::fail(const QString &message) {
-  if (message.isEmpty())
-    return;
-  if (m_state["error"].toString() != message)
-    record(tr("Owly error"), message, "dialog-error");
-  set("error", message);
-}
-void Backend::dismissError() { set("error", QString{}); }
-void Backend::openDownloads() {
-  QDesktopServices::openUrl(QUrl::fromLocalFile(m_folder));
-}
-
-void Backend::openHistoryFile(const QUrl &url, bool folder) {
-  // Only recorded local transfers can launch an application on an explicit
-  // click.
-  if (!url.isLocalFile())
-    return;
-  bool recorded = false;
-  for (const auto &entry : m_state["history"].toList()) {
-    for (const auto &item : entry.toMap()["files"].toList())
-      recorded |= item.toMap()["url"].toUrl() == url;
-  }
-  if (!recorded)
-    return;
-  const QFileInfo file(url.toLocalFile());
-  if (!file.exists() || !file.isReadable()) {
-    fail(tr("The file is no longer available at its original location: %1")
-             .arg(file.absoluteFilePath()));
-    return;
-  }
-  if (!QDesktopServices::openUrl(
-          folder ? QUrl::fromLocalFile(file.absolutePath()) : url))
-    fail(tr("Could not open %1 with the system application.")
-             .arg(file.fileName()));
-}
-
-
